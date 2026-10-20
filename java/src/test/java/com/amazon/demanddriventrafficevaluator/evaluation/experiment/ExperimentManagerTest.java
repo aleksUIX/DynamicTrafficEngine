@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -64,7 +65,7 @@ class ExperimentManagerTest {
         when(mockConfiguration.getExperimentDefinitionByName()).thenReturn(experimentDefinitions);
         when(mockAllocator.getTreatmentCode(anyString(), any(ExperimentDefinition.class)))
                 .thenReturn("T", "C");
-        when(mockHandler.getExperimentArrangement()).thenReturn(Map.of("exp1", "T", "exp2", "C"));
+        when(mockConfiguration.getModelToExperiment()).thenReturn(Map.of());
 
         // Act
         experimentManager.setupExperimentContext(context);
@@ -72,10 +73,16 @@ class ExperimentManagerTest {
         // Assert
         verify(mockProvider).provide();
         verify(mockAllocator, times(2)).getTreatmentCode(eq("testRequestId"), any(ExperimentDefinition.class));
-        verify(mockHandler, times(2)).assignTreatmentOnExperiment(anyString(), anyString());
-        verify(mockHandler).getExperimentArrangement();
+        verifyNoInteractions(mockHandler);
 
         assertNotNull(context.getExperimentContext());
+        assertEquals(
+                Set.of("T", "C"),
+                Set.of(
+                        context.getExperimentContext().getTreatmentCode("exp1"),
+                        context.getExperimentContext().getTreatmentCode("exp2")
+                )
+        );
         assertFalse(context.getDebugInfo().contains("[Error]"));
     }
 
@@ -125,5 +132,28 @@ class ExperimentManagerTest {
         verify(mockProvider).provide();
         verify(mockAllocator).getTreatmentCode(eq("testRequestId"), any(ExperimentDefinition.class));
         verifyNoInteractions(mockHandler);
+    }
+
+    @Test
+    void testEarlierRequestKeepsItsTreatmentAfterAnotherSetup() {
+        ExperimentManager manager = new ExperimentManager(mockProvider, mockAllocator, new ExperimentHandler());
+        ExperimentDefinition definition = ExperimentDefinition.builder().name("pricing").build();
+        ExperimentConfiguration configuration = new ExperimentConfiguration();
+        configuration.setExperimentDefinitionByName(Map.of("pricing", definition));
+        configuration.setModelToExperiment(Map.of());
+        when(mockProvider.provide()).thenReturn(configuration);
+        when(mockAllocator.getTreatmentCode(anyString(), any(ExperimentDefinition.class)))
+                .thenAnswer(invocation -> "request-a".equals(invocation.getArgument(0)) ? "control" : "treatment");
+
+        EvaluationContext first = new EvaluationContext();
+        first.setRequestId("request-a");
+        manager.setupExperimentContext(first);
+
+        EvaluationContext second = new EvaluationContext();
+        second.setRequestId("request-b");
+        manager.setupExperimentContext(second);
+
+        assertEquals("control", first.getExperimentContext().getTreatmentCode("pricing"));
+        assertEquals("treatment", second.getExperimentContext().getTreatmentCode("pricing"));
     }
 }
